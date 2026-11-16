@@ -43,6 +43,7 @@
 #include <linux/workqueue.h>
 
 #define RAZER_ACCESSORY_WAIT_MIN_US 600
+#define RAZER_ACCESSORY_WAIT_US 600
 
 #define RAZER_NEW_DEVICE_WAIT_MIN_US 31000
 
