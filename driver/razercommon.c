@@ -102,6 +102,78 @@ int razer_get_usb_response(struct hid_device *hdev, uint report_index, struct ra
 }
 
 /**
+ * Get a response from a device whose command channel is a numbered HID
+ * feature report (e.g. the Razer Leviathan V2 X uses report ID 7).
+ *
+ * The report ID is prepended to the 90-byte razer_report, so the transfers
+ * are one byte longer, and wValue is 0x0300 | report_id.
+ */
+int razer_get_usb_response_report_id(struct hid_device *hdev, unsigned char report_id, unsigned int report_index, struct razer_report* request_report, unsigned int response_index, struct razer_report* response_report, unsigned long wait)
+{
+    struct usb_device *usb_dev = hid_to_usb_dev(hdev);
+    u8 buf[sizeof(struct razer_report) + 1];
+    int err;
+
+    if (WARN_ON(report_id == 0x00))
+        return -EINVAL;
+
+    if (WARN_ON(request_report->transaction_id.id == 0x00)) {
+        request_report->transaction_id.id = 0xFF;
+    }
+
+    buf[0] = report_id;
+    memcpy(buf + 1, request_report, sizeof(*request_report));
+
+    // Send the request to the device.
+    err = usb_control_msg_send(usb_dev,
+                               0, // endpoint to send the message to
+                               HID_REQ_SET_REPORT, // USB message request value (0x09)
+                               USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_OUT, // USB message request type value (0x21)
+                               0x0300 | report_id, // USB message value
+                               report_index, // USB message index value
+                               buf, // pointer to the data to send
+                               sizeof(buf), // length in bytes of the data to send
+                               USB_CTRL_SET_TIMEOUT, // time in msecs to wait for the message to complete before timing out
+                               GFP_KERNEL);
+
+    // Wait
+    fsleep(wait);
+
+    if (err) {
+        hid_warn(hdev, "Failed to send USB control message: %d\n", err);
+        return err;
+    }
+
+    // Now ask for response
+    err = usb_control_msg_recv(usb_dev,
+                               0, // endpoint to send the message to
+                               HID_REQ_GET_REPORT, // USB message request value (0x01)
+                               USB_TYPE_CLASS | USB_RECIP_INTERFACE | USB_DIR_IN, // USB message request type value (0xA1)
+                               0x0300 | report_id, // USB message value
+                               response_index, // USB message index value
+                               buf, // pointer to the data to be filled in by the message
+                               sizeof(buf), // length in bytes of the data to be received
+                               USB_CTRL_SET_TIMEOUT, // time in msecs to wait for the message to complete before timing out
+                               GFP_KERNEL);
+    if (err) {
+        hid_warn(hdev, "Failed to receive USB control message: %d\n", err);
+        return err;
+    }
+
+    memcpy(response_report, buf + 1, sizeof(*response_report));
+
+    if (WARN_ONCE(response_report->data_size > ARRAY_SIZE(response_report->arguments),
+                  "Field data_size %d in response is bigger than arguments\n",
+                  response_report->data_size)) {
+        /* Sanitize the value since at the moment callers don't respect the return code */
+        response_report->data_size = ARRAY_SIZE(response_report->arguments);
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
+/**
  * Calculate the checksum for the usb message
  *
  * Checksum byte is stored in the 2nd last byte in the messages payload.
